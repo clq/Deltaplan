@@ -6,6 +6,7 @@ Key API endpoints:
   GET  /API/departments        — list departments
   GET  /API/shifttypes         — list shift types (vagttyper)
   GET  /API/employees-schedule — get shifts (params: emp_id, date_from, date_to, employees)
+  GET  /API/employees-schedule/schedule — full view (own, colleagues, vacant)
   GET  /API/dashboard-frontpage — dashboard incl. vacant_shifts, shifts_on_dates, etc.
 """
 
@@ -132,6 +133,27 @@ class DeltaplanClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_full_schedule(self, date_from, date_to):
+        """Fetch the full schedule view: own shifts, colleagues, vacants.
+
+        This is the main endpoint that returns everything visible in the
+        Deltaplan schedule UI.
+        """
+        resp = self.session.get(
+            f"{API_URL}/employees-schedule/schedule",
+            headers=self._api_headers(),
+            params=[
+                ("method", "GET"),
+                ("period[]", date_from),
+                ("period[]", date_to),
+            ],
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("success"):
+            raise RuntimeError(f"Schedule fetch failed: {data}")
+        return data["data"]
+
     def get_dashboard(self):
         """Fetch the dashboard which includes vacant shifts, own shifts, etc."""
         resp = self.session.get(
@@ -196,6 +218,83 @@ class DeltaplanClient:
             shift["_shift_type_name"] = st["vagttype_navn"]
             shift["_shift_type_abbr"] = st["vagttype_forkortelse"]
         return shift
+
+    def get_enriched_schedule(self, date_from, date_to, target_types=None):
+        """Fetch the full schedule and enrich colleague shifts with type info.
+
+        The schedule endpoint hides shift_type for colleagues, so we fetch
+        each colleague's shifts individually to get vagttype_id, then merge.
+        Only colleagues whose shifts match target_types are included.
+
+        Args:
+            target_types: e.g. ["FP 1", "FP 2", "E 3"]. If None, uses config.
+        """
+        import time as _time
+
+        if target_types is None:
+            target_types = self.config.get("shift_types", [])
+        target_set = set(target_types)
+
+        schedule = self.get_full_schedule(date_from, date_to)
+        shift_types = self.get_shift_types()
+
+        # Build type-ID → abbreviation map
+        id_to_abbr = {
+            sid: st["vagttype_forkortelse"] for sid, st in shift_types.items()
+        }
+
+        # Collect unique colleague employee IDs + names from schedule
+        emp_ids = set()
+        emp_names = {}
+        for shifts in schedule.get("colleagues_shifts", {}).values():
+            for s in shifts:
+                eid = s.get("employee_id")
+                if eid:
+                    emp_ids.add(eid)
+                    emp_names[eid] = s.get("employee_name", "?")
+
+        # Fetch each colleague's shifts to get vagttype_id
+        enriched_colleagues = {}  # date → [shift, …]
+        for eid in emp_ids:
+            resp = self.session.get(
+                f"{API_URL}/employees-schedule",
+                headers=self._api_headers(),
+                params={
+                    "emp_id": eid,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                    "employees": eid,
+                },
+            )
+            if not resp.ok:
+                continue
+            data = resp.json()
+            if not data.get("success") or not data.get("data"):
+                continue
+            for s in data["data"]:
+                abbr = id_to_abbr.get(str(s.get("vagttype_id", "")), "")
+                if target_set and abbr not in target_set:
+                    continue
+                date = s["vagt_dato"]
+                enriched_colleagues.setdefault(date, []).append({
+                    "date": date,
+                    "time_start": s["vagt_start"][:5],
+                    "time_end": s["vagt_slut"][:5],
+                    "employee_name": emp_names.get(eid, str(eid)),
+                    "employee_id": eid,
+                    "shift_type": abbr,
+                    "department_name": "Resepsjon",
+                    "status": s.get("status", ""),
+                    "vagt_id": s.get("vagt_id", ""),
+                })
+            _time.sleep(0.05)  # be polite to the server
+
+        # Sort each date's list
+        for shifts in enriched_colleagues.values():
+            shifts.sort(key=lambda s: s["time_start"])
+
+        schedule["colleagues_shifts"] = enriched_colleagues
+        return schedule
 
 
 def ensure_data_dir():

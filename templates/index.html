@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deltaplan – Shift Monitor</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e0e0e0;
+    --dim: #888;
+    --accent: #5b9cf5;
+    --green: #4caf50;
+    --orange: #ff9800;
+    --red: #f44336;
+    --vacant-bg: #1b2e1b;
+    --vacant-border: #4caf50;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 1rem;
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.4rem; font-weight: 600; }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .controls label { color: var(--dim); font-size: 0.85rem; }
+  .controls input[type=number] {
+    width: 60px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+  .controls button, .btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 0.4rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .controls button:hover, .btn:hover { opacity: 0.85; }
+  .status {
+    font-size: 0.8rem;
+    color: var(--dim);
+  }
+  .status.error { color: var(--red); }
+
+  /* Sections */
+  .section { margin-bottom: 2rem; }
+  .section h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .badge {
+    background: var(--red);
+    color: #fff;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+    font-weight: 700;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 2px solid var(--border);
+    color: var(--dim);
+    font-weight: 500;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  td {
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:hover td { background: rgba(255,255,255,0.03); }
+
+  .vacant-row td {
+    background: var(--vacant-bg);
+    border-color: var(--vacant-border);
+  }
+  .vacant-row.new-shift td {
+    animation: flash 2s ease-in-out 3;
+  }
+  @keyframes flash {
+    0%, 100% { background: var(--vacant-bg); }
+    50% { background: #2d4a2d; }
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+  .tag-fp1  { background: #1a3a5c; color: #7cb9f5; }
+  .tag-fp2  { background: #3a1a5c; color: #c57cf5; }
+  .tag-e3   { background: #5c3a1a; color: #f5c57c; }
+  .tag-other { background: #2a2d3a; color: #aaa; }
+  .tag-vacant { background: #2e4a2e; color: #8f8; }
+  .tag-status-K { color: var(--green); }
+  .tag-status-G { color: var(--orange); }
+  .tag-status-L { color: var(--accent); }
+
+  .empty-msg {
+    color: var(--dim);
+    padding: 1rem 0.75rem;
+    font-style: italic;
+  }
+
+  /* Alert banner */
+  #alert-banner {
+    display: none;
+    background: var(--green);
+    color: #fff;
+    padding: 1rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  #alert-banner:hover { opacity: 0.9; }
+
+  .mute-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+  }
+  .mute-btn:hover { border-color: var(--text); color: var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📋 Deltaplan Shift Monitor</h1>
+  <div class="controls">
+    <label>
+      Poll every
+      <input type="number" id="poll-interval" min="1" max="120" value="5">
+      min
+    </label>
+    <button onclick="setPollInterval()">Set</button>
+    <button onclick="refresh()">⟳ Refresh now</button>
+    <button class="mute-btn" id="mute-btn" onclick="toggleMute()">🔔 Sound on</button>
+    <span class="status" id="status">Connecting…</span>
+  </div>
+</header>
+
+<div id="alert-banner" onclick="dismissAlert()">
+  🔔 New vacant shift(s) available! Click to dismiss.
+</div>
+
+<div class="section">
+  <h2>🟢 Available Shifts <span id="vacant-badge" class="badge" style="display:none">0</span></h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Time</th>
+        <th>Type</th>
+        <th>Department</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="vacant-body">
+      <tr><td colspan="5" class="empty-msg">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>👤 My Shifts</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Time</th>
+        <th>Type</th>
+        <th>Department</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="own-body">
+      <tr><td colspan="5" class="empty-msg">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>👥 Colleagues' Shifts <span style="font-size:0.8rem; color:var(--dim); font-weight:normal;">(filtered to FP 1, FP 2, E 3)</span></h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Time</th>
+        <th>Who</th>
+        <th>Type</th>
+        <th>Department</th>
+      </tr>
+    </thead>
+    <tbody id="colleagues-body">
+      <tr><td colspan="5" class="empty-msg">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+let muted = false;
+let alertAudio = null;
+let newVacantIds = new Set();
+
+// ── Audio ──
+function createBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    return ctx;
+  } catch { return null; }
+}
+
+function playAlert() {
+  if (muted) return;
+  try {
+    const ctx = createBeep();
+    if (!ctx) return;
+    // Play a pleasant two-tone chime
+    [440, 660].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.2);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.2 + 0.5);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.2);
+      osc.stop(ctx.currentTime + i * 0.2 + 0.5);
+    });
+  } catch {}
+}
+
+function toggleMute() {
+  muted = !muted;
+  document.getElementById('mute-btn').textContent = muted ? '🔇 Sound off' : '🔔 Sound on';
+}
+
+// ── Helpers ──
+function fmtDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const day = DAY_NAMES[d.getDay()];
+  return `${day} ${dateStr}`;
+}
+
+function fmtTime(start, end) {
+  const s = (start || '?').substring(0, 5);
+  const e = (end || '?').substring(0, 5);
+  if (s === '00:00' && (e === '' || e === '00:00')) return '—';
+  return `${s} – ${e}`;
+}
+
+function shiftTypeTag(type) {
+  if (!type || type === '-') return '';
+  const cls = type === 'FP 1' ? 'tag-fp1' :
+              type === 'FP 2' ? 'tag-fp2' :
+              type === 'E 3'  ? 'tag-e3'  : 'tag-other';
+  return `<span class="tag ${cls}">${esc(type)}</span>`;
+}
+
+function statusLabel(status) {
+  const labels = { K: 'Confirmed', G: 'Approved', L: 'Vacant', T: 'Swap' };
+  const cls = `tag-status-${status}`;
+  return `<span class="${cls}">${labels[status] || status}</span>`;
+}
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── Render ──
+function renderOwn(shifts) {
+  const tbody = document.getElementById('own-body');
+  if (!shifts || !shifts.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No upcoming shifts</td></tr>';
+    return;
+  }
+  // Filter out past dates
+  const today = new Date().toISOString().slice(0, 10);
+  const upcoming = shifts.filter(s => s.date >= today);
+  if (!upcoming.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No upcoming shifts</td></tr>';
+    return;
+  }
+  tbody.innerHTML = upcoming.map(s => `
+    <tr>
+      <td>${fmtDate(s.date)}</td>
+      <td>${fmtTime(s.time_start, s.time_end)}</td>
+      <td>${shiftTypeTag(s.shift_type)}</td>
+      <td>${esc(s.department_name || s.department_short || '')}</td>
+      <td>${statusLabel(s.status)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderVacant(vacantByDate, newIds) {
+  const tbody = document.getElementById('vacant-body');
+  const badge = document.getElementById('vacant-badge');
+  const banner = document.getElementById('alert-banner');
+
+  const allShifts = [];
+  if (vacantByDate && typeof vacantByDate === 'object') {
+    for (const [date, shifts] of Object.entries(vacantByDate)) {
+      for (const s of shifts) {
+        allShifts.push({ ...s, _date: date });
+      }
+    }
+  }
+  allShifts.sort((a, b) => (a._date || '').localeCompare(b._date || ''));
+
+  if (!allShifts.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No vacant shifts right now</td></tr>';
+    badge.style.display = 'none';
+    return;
+  }
+
+  const newSet = new Set(newIds || []);
+
+  badge.textContent = allShifts.length;
+  badge.style.display = 'inline';
+
+  if (newSet.size > 0) {
+    banner.style.display = 'block';
+    playAlert();
+  }
+
+  tbody.innerHTML = allShifts.map(s => {
+    const id = s.vagt_id || s.id || '';
+    const isNew = newSet.has(id);
+    return `
+      <tr class="vacant-row${isNew ? ' new-shift' : ''}">
+        <td>${fmtDate(s._date || s.vagt_dato || '')}</td>
+        <td>${fmtTime(s.vagt_start, s.vagt_slut)}</td>
+        <td>${shiftTypeTag(s.vagt_navn || s.shift_type || '')}</td>
+        <td>${esc(s.department_name || '')}</td>
+        <td>${statusLabel(s.status || 'L')}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderColleagues(colleaguesByDate) {
+  const tbody = document.getElementById('colleagues-body');
+  const allShifts = [];
+  if (colleaguesByDate && typeof colleaguesByDate === 'object') {
+    for (const [date, shifts] of Object.entries(colleaguesByDate)) {
+      for (const s of shifts) {
+        allShifts.push({ ...s, _date: date });
+      }
+    }
+  }
+  allShifts.sort((a, b) => {
+    const dc = (a._date || '').localeCompare(b._date || '');
+    if (dc !== 0) return dc;
+    return (a.time_start || '').localeCompare(b.time_start || '');
+  });
+
+  if (!allShifts.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No colleague shifts matching filtered types</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = allShifts.map(s => `
+    <tr>
+      <td>${fmtDate(s._date || s.date || '')}</td>
+      <td>${fmtTime(s.time_start, s.time_end)}</td>
+      <td>${esc(s.employee_name || '?')}</td>
+      <td>${shiftTypeTag(s.shift_type)}</td>
+      <td>${esc(s.department_name || s.department_short || '')}</td>
+    </tr>
+  `).join('');
+}
+
+function dismissAlert() {
+  document.getElementById('alert-banner').style.display = 'none';
+}
+
+// ── SSE ──
+function connectSSE() {
+  const status = document.getElementById('status');
+  const es = new EventSource('/sse');
+
+  es.addEventListener('update', (e) => {
+    const data = JSON.parse(e.data);
+    renderOwn(data.own_shifts || []);
+    renderVacant(data.vacant_shifts || {}, data.new_vacant_ids || []);
+    renderColleagues(data.colleagues_shifts || {});
+    const t = data.last_check ? new Date(data.last_check).toLocaleTimeString() : '—';
+    status.textContent = `Last checked: ${t}`;
+    status.className = 'status';
+  });
+
+  es.addEventListener('error', (e) => {
+    if (e.data) {
+      const data = JSON.parse(e.data);
+      status.textContent = `Error: ${data.error}`;
+      status.className = 'status error';
+    }
+  });
+
+  es.addEventListener('config', (e) => {
+    const data = JSON.parse(e.data);
+    document.getElementById('poll-interval').value = data.poll_interval_minutes;
+  });
+
+  es.onerror = () => {
+    status.textContent = 'Disconnected — reconnecting…';
+    status.className = 'status error';
+  };
+}
+
+// ── Controls ──
+function setPollInterval() {
+  const val = document.getElementById('poll-interval').value;
+  fetch('/api/poll-interval', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ minutes: parseInt(val) }),
+  });
+}
+
+function refresh() {
+  document.getElementById('status').textContent = 'Refreshing…';
+  fetch('/api/refresh', { method: 'POST' });
+}
+
+// ── Init ──
+connectSSE();
+
+// Fetch initial poll interval from config
+fetch('/api/state').then(r => r.json()).then(s => {
+  document.getElementById('poll-interval').value = Math.round(s.poll_interval / 60);
+});
+</script>
+</body>
+</html>
