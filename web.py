@@ -80,6 +80,9 @@ def poller_loop():
             schedule = client.get_enriched_schedule(today, end, target_types)
 
             own = strip_html(schedule.get("own_shifts", []))
+            # Filter out "anti-shifts" (department_id=1 / department_short="-")
+            # which are availability markers, not real assigned shifts
+            own = [s for s in own if s.get("department_id") != "1"]
             colleagues = schedule.get("colleagues_shifts", {})
             vacant = strip_html(schedule.get("vacant_shifts", {}))
 
