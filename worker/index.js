@@ -276,17 +276,8 @@ export default {
       // Vacant shifts: strip HTML
       const vacantShifts = stripHtml(schedule.vacant_shifts || {});
 
-      // Colleague shifts: use directly from schedule endpoint
-      // Note: shift_type is "-" for colleagues in this endpoint,
-      // but we still get name, time, department info
-      const colleagueShifts = stripHtml(schedule.colleagues_shifts || {});
-
-      // Collect available shift types from own shifts (which DO have types)
+      // Collect available shift types from the shift types list
       const seenTypes = new Set();
-      for (const s of ownShifts) {
-        if (s.shift_type && s.shift_type !== '-') seenTypes.add(s.shift_type);
-      }
-      // Also add types we know about from the shift types list
       for (const abbr of Object.values(idToAbbr)) {
         seenTypes.add(abbr);
       }
@@ -294,7 +285,6 @@ export default {
       return jsonResp({
         success: true,
         own_shifts: ownShifts,
-        colleagues_shifts: colleagueShifts,
         vacant_shifts: vacantShifts,
         available_types: [...seenTypes].sort(),
       }, 200, origin);

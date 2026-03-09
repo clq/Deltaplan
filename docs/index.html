@@ -312,14 +312,6 @@
   </table>
 </div>
 
-<div class="section">
-  <h2>👥 Colleagues' Shifts</h2>
-  <div class="filters" id="colleagues-filters"></div>
-  <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Who</th><th>Type</th><th>Department</th></tr></thead>
-    <tbody id="colleagues-body"><tr><td colspan="5" class="empty-msg">Waiting for first poll…</td></tr></tbody>
-  </table>
-</div>
 </div><!-- /app -->
 
 <script>
@@ -344,9 +336,7 @@ let prevVacantIds = new Set();
 
 // Filter state
 let vacantFilterActive = new Set(DEFAULT_TYPES);
-let colleagueFilterActive = new Set(DEFAULT_TYPES);
 let rawVacant = {};
-let rawColleagues = {};
 let rawNewIds = [];
 let availableTypes = [];
 
@@ -450,14 +440,12 @@ async function poll() {
 
     // Store raw data for filter re-renders
     rawVacant = data.vacant_shifts || {};
-    rawColleagues = data.colleagues_shifts || {};
     rawNewIds = newIds;
     availableTypes = data.available_types || [];
 
     renderOwn(data.own_shifts || []);
     updateFilters();
     renderVacant();
-    renderColleagues();
 
     setStatus(`Last checked: ${new Date().toLocaleTimeString()}`);
   } catch (e) {
@@ -571,7 +559,6 @@ function getVacantTypes() {
 
 function updateFilters() {
   buildFilterChips(document.getElementById('vacant-filters'), getVacantTypes(), vacantFilterActive, renderVacant);
-  buildFilterChips(document.getElementById('colleagues-filters'), [...availableTypes], colleagueFilterActive, renderColleagues);
 }
 
 // ── Render ──
@@ -637,38 +624,6 @@ function renderVacant() {
       </tr>
     `;
   }).join('');
-}
-
-function renderColleagues() {
-  const tbody = document.getElementById('colleagues-body');
-  const allShifts = [];
-  for (const [date, shifts] of Object.entries(rawColleagues)) {
-    for (const s of shifts) {
-      const type = s.shift_type || '';
-      if (colleagueFilterActive.size > 0 && type && type !== '-' && !colleagueFilterActive.has(type)) continue;
-      allShifts.push({ ...s, _date: date });
-    }
-  }
-  allShifts.sort((a, b) => {
-    const dc = (a._date || '').localeCompare(b._date || '');
-    if (dc !== 0) return dc;
-    return (a.time_start || '').localeCompare(b.time_start || '');
-  });
-
-  if (!allShifts.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No colleague shifts matching filter</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = allShifts.map(s => `
-    <tr>
-      <td>${fmtDate(s._date || s.date || '')}</td>
-      <td>${fmtTime(s.time_start, s.time_end)}</td>
-      <td>${esc(s.employee_name || '?')}</td>
-      <td>${shiftTypeTag(s.shift_type)}</td>
-      <td>${esc(s.department_name || s.department_short || '')}</td>
-    </tr>
-  `).join('');
 }
 
 function dismissAlert() {
