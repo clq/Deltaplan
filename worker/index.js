@@ -218,25 +218,25 @@ export default {
       // 1. Login
       let cookies = await doLogin(username, password);
 
-      // 2. Get user info
-      const userResult = await fetchJson(`${API_URL}/login`, {
-        Cookie: cookieStr(cookies),
-      });
-      Object.assign(cookies, userResult.cookies);
-      const userData = userResult.json;
-      const userId = userData.medarbejder_id;
-      const companyId = userData.virksomhed_id;
+      // 2. Extract user info from cookies (base64-encoded)
+      // vs_medarb_id = base64(employee_id), vs_virksomhed_id = base64(company_id)
+      let userId, companyId;
+      try {
+        userId = atob(decodeURIComponent(cookies.vs_medarb_id || ''));
+        companyId = atob(decodeURIComponent(cookies.vs_virksomhed_id || ''));
+      } catch {
+        return jsonResp({ error: 'Could not decode user info from cookies' }, 500, origin);
+      }
       if (!userId || !companyId) {
-        return jsonResp({ error: 'Could not extract user info after login' }, 500, origin);
+        return jsonResp({ error: `Missing user cookies (have: ${Object.keys(cookies).join(', ')})` }, 500, origin);
       }
 
       const apiH = {
         Cookie: cookieStr(cookies),
-        'User-Id': String(userId),
-        'User-Company-Id': String(companyId),
+        'User-Id': userId,
+        'User-Company-Id': companyId,
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
-        'Referer': `${DELTAPLAN_BASE}/`,
       };
 
       // 3. Fetch shift types + schedule in parallel
