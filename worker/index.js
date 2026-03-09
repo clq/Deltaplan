@@ -47,7 +47,13 @@ function stripHtml(obj) {
 
 async function fetchJson(url, headers) {
   const r = await fetch(url, { headers });
-  return { json: await r.json(), cookies: extractCookies(r) };
+  const cookies = extractCookies(r);
+  const text = await r.text();
+  try {
+    return { json: JSON.parse(text), cookies };
+  } catch {
+    throw new Error(`Non-JSON response from ${url.split('?')[0]}: ${text.substring(0, 150)}`);
+  }
 }
 
 export default {
@@ -59,6 +65,12 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // Health check
+    if (url.pathname === '/' || url.pathname === '/health') {
+      return jsonResp({ status: 'ok', message: 'Deltaplan proxy worker is running' }, 200, origin);
+    }
+
     if (url.pathname !== '/schedule' || request.method !== 'POST') {
       return jsonResp({ error: 'POST /schedule required' }, 404, origin);
     }

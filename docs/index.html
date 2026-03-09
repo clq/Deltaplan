@@ -429,7 +429,13 @@ async function poll() {
       body: JSON.stringify({ username, password, date_from: today, date_to: end }),
     });
 
-    const data = await resp.json();
+    const text = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Worker returned non-JSON (HTTP ${resp.status}): ${text.substring(0, 200)}`);
+    }
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     // Detect new vacant shifts
