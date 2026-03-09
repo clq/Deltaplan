@@ -1,7 +1,7 @@
 {
   "username": "YOUR_USERNAME_HERE",
   "password": "YOUR_PASSWORD_HERE",
-  "shift_types": ["FP 1", "FP 2", "E 3"],
+  "shift_types": ["FP 1", "FP 2", "E 3", "FP KVELD"],
   "poll_interval_minutes": 5,
   "notify_method": "desktop"
 }
