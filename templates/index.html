@@ -172,6 +172,34 @@
     font-size: 0.8rem;
   }
   .mute-btn:hover { border-color: var(--text); color: var(--text); }
+
+  /* Filter chips */
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.75rem;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--dim);
+    user-select: none;
+    transition: all 0.15s;
+  }
+  .chip.active {
+    border-color: var(--accent);
+    background: #1a2a4a;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .chip:hover { border-color: var(--text); }
 </style>
 </head>
 <body>
@@ -197,6 +225,7 @@
 
 <div class="section">
   <h2>🟢 Available Shifts <span id="vacant-badge" class="badge" style="display:none">0</span></h2>
+  <div class="filters" id="vacant-filters"></div>
   <table>
     <thead>
       <tr>
@@ -232,7 +261,8 @@
 </div>
 
 <div class="section">
-  <h2>👥 Colleagues' Shifts <span style="font-size:0.8rem; color:var(--dim); font-weight:normal;">(filtered to FP 1, FP 2, E 3)</span></h2>
+  <h2>👥 Colleagues' Shifts</h2>
+  <div class="filters" id="colleagues-filters"></div>
   <table>
     <thead>
       <tr>
@@ -251,10 +281,21 @@
 
 <script>
 const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const DEFAULT_TYPES = ['FP 1', 'FP 2', 'E 3'];
 
 let muted = false;
 let alertAudio = null;
 let newVacantIds = new Set();
+
+// Filter state: which types are active per section
+let vacantFilterActive = new Set(DEFAULT_TYPES);
+let colleagueFilterActive = new Set(DEFAULT_TYPES);
+
+// Raw unfiltered data (kept so filters can re-render without re-fetch)
+let rawVacant = {};
+let rawColleagues = {};
+let rawNewIds = [];
+let availableTypes = [];
 
 // ── Audio ──
 function createBeep() {
@@ -269,7 +310,6 @@ function playAlert() {
   try {
     const ctx = createBeep();
     if (!ctx) return;
-    // Play a pleasant two-tone chime
     [440, 660].forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -324,6 +364,69 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// ── Filters ──
+function buildFilterChips(containerEl, allTypes, activeSet, onToggle) {
+  containerEl.innerHTML = '';
+  // Ensure default types appear first, then the rest sorted
+  const ordered = [...DEFAULT_TYPES.filter(t => allTypes.includes(t)),
+                   ...allTypes.filter(t => !DEFAULT_TYPES.includes(t)).sort()];
+  for (const t of ordered) {
+    const chip = document.createElement('span');
+    chip.className = 'chip' + (activeSet.has(t) ? ' active' : '');
+    chip.textContent = t;
+    chip.onclick = () => {
+      if (activeSet.has(t)) activeSet.delete(t);
+      else activeSet.add(t);
+      chip.classList.toggle('active');
+      onToggle();
+    };
+    containerEl.appendChild(chip);
+  }
+  // "All" toggle at the end
+  const allChip = document.createElement('span');
+  allChip.className = 'chip' + (activeSet.size === allTypes.length ? ' active' : '');
+  allChip.textContent = activeSet.size === allTypes.length ? '✓ All' : 'All';
+  allChip.onclick = () => {
+    if (activeSet.size === allTypes.length) {
+      activeSet.clear();
+    } else {
+      for (const t of allTypes) activeSet.add(t);
+    }
+    buildFilterChips(containerEl, allTypes, activeSet, onToggle);
+    onToggle();
+  };
+  containerEl.appendChild(allChip);
+}
+
+function getVacantTypes() {
+  const types = new Set();
+  if (rawVacant && typeof rawVacant === 'object') {
+    for (const shifts of Object.values(rawVacant)) {
+      for (const s of shifts) {
+        const t = s.vagt_navn || s.shift_type || '';
+        if (t && t !== '-') types.add(t);
+      }
+    }
+  }
+  return [...types];
+}
+
+function getColleagueTypes() {
+  // Use the available_types from the backend (enriched data)
+  return [...availableTypes];
+}
+
+function updateFilters() {
+  const vacantTypes = getVacantTypes();
+  const colleagueTypes = getColleagueTypes();
+  buildFilterChips(
+    document.getElementById('vacant-filters'), vacantTypes, vacantFilterActive, () => renderVacant()
+  );
+  buildFilterChips(
+    document.getElementById('colleagues-filters'), colleagueTypes, colleagueFilterActive, () => renderColleagues()
+  );
+}
+
 // ── Render ──
 function renderOwn(shifts) {
   const tbody = document.getElementById('own-body');
@@ -331,7 +434,6 @@ function renderOwn(shifts) {
     tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No upcoming shifts</td></tr>';
     return;
   }
-  // Filter out past dates
   const today = new Date().toISOString().slice(0, 10);
   const upcoming = shifts.filter(s => s.date >= today);
   if (!upcoming.length) {
@@ -349,15 +451,17 @@ function renderOwn(shifts) {
   `).join('');
 }
 
-function renderVacant(vacantByDate, newIds) {
+function renderVacant() {
   const tbody = document.getElementById('vacant-body');
   const badge = document.getElementById('vacant-badge');
   const banner = document.getElementById('alert-banner');
 
   const allShifts = [];
-  if (vacantByDate && typeof vacantByDate === 'object') {
-    for (const [date, shifts] of Object.entries(vacantByDate)) {
+  if (rawVacant && typeof rawVacant === 'object') {
+    for (const [date, shifts] of Object.entries(rawVacant)) {
       for (const s of shifts) {
+        const type = s.vagt_navn || s.shift_type || '';
+        if (vacantFilterActive.size > 0 && type && type !== '-' && !vacantFilterActive.has(type)) continue;
         allShifts.push({ ...s, _date: date });
       }
     }
@@ -365,12 +469,12 @@ function renderVacant(vacantByDate, newIds) {
   allShifts.sort((a, b) => (a._date || '').localeCompare(b._date || ''));
 
   if (!allShifts.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No vacant shifts right now</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No vacant shifts matching filter</td></tr>';
     badge.style.display = 'none';
     return;
   }
 
-  const newSet = new Set(newIds || []);
+  const newSet = new Set(rawNewIds || []);
 
   badge.textContent = allShifts.length;
   badge.style.display = 'inline';
@@ -395,12 +499,14 @@ function renderVacant(vacantByDate, newIds) {
   }).join('');
 }
 
-function renderColleagues(colleaguesByDate) {
+function renderColleagues() {
   const tbody = document.getElementById('colleagues-body');
   const allShifts = [];
-  if (colleaguesByDate && typeof colleaguesByDate === 'object') {
-    for (const [date, shifts] of Object.entries(colleaguesByDate)) {
+  if (rawColleagues && typeof rawColleagues === 'object') {
+    for (const [date, shifts] of Object.entries(rawColleagues)) {
       for (const s of shifts) {
+        const type = s.shift_type || '';
+        if (colleagueFilterActive.size > 0 && type && type !== '-' && !colleagueFilterActive.has(type)) continue;
         allShifts.push({ ...s, _date: date });
       }
     }
@@ -412,7 +518,7 @@ function renderColleagues(colleaguesByDate) {
   });
 
   if (!allShifts.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No colleague shifts matching filtered types</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">No colleague shifts matching filter</td></tr>';
     return;
   }
 
@@ -438,9 +544,18 @@ function connectSSE() {
 
   es.addEventListener('update', (e) => {
     const data = JSON.parse(e.data);
+    // Store raw data
+    rawVacant = data.vacant_shifts || {};
+    rawColleagues = data.colleagues_shifts || {};
+    rawNewIds = data.new_vacant_ids || [];
+    availableTypes = data.available_types || [];
+
+    // Render
     renderOwn(data.own_shifts || []);
-    renderVacant(data.vacant_shifts || {}, data.new_vacant_ids || []);
-    renderColleagues(data.colleagues_shifts || {});
+    updateFilters();
+    renderVacant();
+    renderColleagues();
+
     const t = data.last_check ? new Date(data.last_check).toLocaleTimeString() : '—';
     status.textContent = `Last checked: ${t}`;
     status.className = 'status';
@@ -483,7 +598,6 @@ function refresh() {
 // ── Init ──
 connectSSE();
 
-// Fetch initial poll interval from config
 fetch('/api/state').then(r => r.json()).then(s => {
   document.getElementById('poll-interval').value = Math.round(s.poll_interval / 60);
 });

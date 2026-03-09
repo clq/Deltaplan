@@ -224,16 +224,13 @@ class DeltaplanClient:
 
         The schedule endpoint hides shift_type for colleagues, so we fetch
         each colleague's shifts individually to get vagttype_id, then merge.
-        Only colleagues whose shifts match target_types are included.
+        All colleague shifts with a known shift type are included (filtering
+        is done client-side).
 
         Args:
-            target_types: e.g. ["FP 1", "FP 2", "E 3"]. If None, uses config.
+            target_types: unused, kept for API compat. Filtering is client-side.
         """
         import time as _time
-
-        if target_types is None:
-            target_types = self.config.get("shift_types", [])
-        target_set = set(target_types)
 
         schedule = self.get_full_schedule(date_from, date_to)
         shift_types = self.get_shift_types()
@@ -255,6 +252,7 @@ class DeltaplanClient:
 
         # Fetch each colleague's shifts to get vagttype_id
         enriched_colleagues = {}  # date → [shift, …]
+        seen_types = set()
         for eid in emp_ids:
             resp = self.session.get(
                 f"{API_URL}/employees-schedule",
@@ -273,8 +271,9 @@ class DeltaplanClient:
                 continue
             for s in data["data"]:
                 abbr = id_to_abbr.get(str(s.get("vagttype_id", "")), "")
-                if target_set and abbr not in target_set:
+                if not abbr:
                     continue
+                seen_types.add(abbr)
                 date = s["vagt_dato"]
                 enriched_colleagues.setdefault(date, []).append({
                     "date": date,
@@ -294,6 +293,7 @@ class DeltaplanClient:
             shifts.sort(key=lambda s: s["time_start"])
 
         schedule["colleagues_shifts"] = enriched_colleagues
+        schedule["available_shift_types"] = sorted(seen_types)
         return schedule
 
 

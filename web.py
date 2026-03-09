@@ -20,7 +20,8 @@ state = {
     "own_shifts": [],
     "colleagues_shifts": {},   # date → [shift, …]
     "vacant_shifts": {},       # date → [shift, …]
-    "shift_types": [],         # configured filter types
+    "default_types": [],       # configured default filter (from config.json)
+    "available_types": [],     # all shift types seen in colleague data
     "last_check": None,
     "poll_interval": 300,
     "error": None,
@@ -67,7 +68,7 @@ def poller_loop():
 
     with state_lock:
         state["poll_interval"] = config.get("poll_interval_minutes", 5) * 60
-        state["shift_types"] = list(target_types)
+        state["default_types"] = list(target_types)
 
     prev_vacant_ids = set()
 
@@ -95,11 +96,13 @@ def poller_loop():
             prev_vacant_ids = current_ids
 
             now = datetime.now().isoformat()
+            available_types = schedule.get("available_shift_types", [])
 
             with state_lock:
                 state["own_shifts"] = own
                 state["colleagues_shifts"] = colleagues
                 state["vacant_shifts"] = vacant
+                state["available_types"] = available_types
                 state["last_check"] = now
                 state["error"] = None
                 state["new_vacant_ids"] = new_ids
@@ -108,6 +111,7 @@ def poller_loop():
                 "own_shifts": own,
                 "colleagues_shifts": colleagues,
                 "vacant_shifts": vacant,
+                "available_types": available_types,
                 "last_check": now,
                 "new_vacant_ids": new_ids,
             })
@@ -164,6 +168,7 @@ def sse():
                 "own_shifts": state["own_shifts"],
                 "colleagues_shifts": state["colleagues_shifts"],
                 "vacant_shifts": state["vacant_shifts"],
+                "available_types": state["available_types"],
                 "last_check": state["last_check"],
                 "new_vacant_ids": state["new_vacant_ids"],
             }, ensure_ascii=False, default=str)
