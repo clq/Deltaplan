@@ -239,7 +239,7 @@ export default {
         'Pragma': 'no-cache',
       };
 
-      // 3. Fetch shift types + schedule in parallel
+      // 3. Fetch shift types + schedule in parallel (just 2 API calls)
       const [typesResult, schedResult] = await Promise.all([
         fetchJson(`${API_URL}/shifttypes`, apiH),
         fetchJson(
@@ -276,64 +276,25 @@ export default {
       // Vacant shifts: strip HTML
       const vacantShifts = stripHtml(schedule.vacant_shifts || {});
 
-      // 4. Enrich colleague shifts
-      const empIds = new Set();
-      const empNames = {};
-      for (const shifts of Object.values(schedule.colleagues_shifts || {})) {
-        for (const s of (Array.isArray(shifts) ? shifts : [])) {
-          if (s.employee_id) {
-            empIds.add(s.employee_id);
-            empNames[s.employee_id] = s.employee_name || '?';
-          }
-        }
-      }
+      // Colleague shifts: use directly from schedule endpoint
+      // Note: shift_type is "-" for colleagues in this endpoint,
+      // but we still get name, time, department info
+      const colleagueShifts = stripHtml(schedule.colleagues_shifts || {});
 
-      const empArr = [...empIds].slice(0, 44); // stay under 50 subrequest limit
-      const enriched = {}; // date → [shift, …]
+      // Collect available shift types from own shifts (which DO have types)
       const seenTypes = new Set();
-
-      // Batch colleague fetches in groups of 6
-      for (let i = 0; i < empArr.length; i += 6) {
-        const batch = empArr.slice(i, i + 6);
-        const results = await Promise.all(
-          batch.map(eid =>
-            fetchJson(
-              `${API_URL}/employees-schedule?emp_id=${eid}&date_from=${date_from}&date_to=${date_to}&employees=${eid}`,
-              apiH,
-            ).then(r => ({ eid, data: r.json })).catch(() => ({ eid, data: null }))
-          )
-        );
-        for (const { eid, data } of results) {
-          if (!data?.success || !data.data) continue;
-          for (const s of data.data) {
-            const abbr = idToAbbr[String(s.vagttype_id || '')];
-            if (!abbr) continue;
-            seenTypes.add(abbr);
-            const date = s.vagt_dato;
-            if (!enriched[date]) enriched[date] = [];
-            enriched[date].push({
-              date,
-              time_start: (s.vagt_start || '').substring(0, 5),
-              time_end: (s.vagt_slut || '').substring(0, 5),
-              employee_name: empNames[eid] || String(eid),
-              employee_id: eid,
-              shift_type: abbr,
-              department_name: 'Resepsjon',
-              status: s.status || '',
-              vagt_id: s.vagt_id || '',
-            });
-          }
-        }
+      for (const s of ownShifts) {
+        if (s.shift_type && s.shift_type !== '-') seenTypes.add(s.shift_type);
       }
-
-      for (const shifts of Object.values(enriched)) {
-        shifts.sort((a, b) => (a.time_start || '').localeCompare(b.time_start || ''));
+      // Also add types we know about from the shift types list
+      for (const abbr of Object.values(idToAbbr)) {
+        seenTypes.add(abbr);
       }
 
       return jsonResp({
         success: true,
         own_shifts: ownShifts,
-        colleagues_shifts: enriched,
+        colleagues_shifts: colleagueShifts,
         vacant_shifts: vacantShifts,
         available_types: [...seenTypes].sort(),
       }, 200, origin);
