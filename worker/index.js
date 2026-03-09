@@ -1,17 +1,18 @@
 const DELTAPLAN_BASE = 'https://deltaplan.dk/deltaplan_v2/classic';
 const API_URL = `${DELTAPLAN_BASE}/API`;
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 function corsHeaders(origin) {
   return {
     'Access-Control-Allow-Origin': origin || '*',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
   };
 }
 
 function jsonResp(data, status, origin) {
-  return new Response(JSON.stringify(data), {
+  return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
   });
@@ -19,14 +20,47 @@ function jsonResp(data, status, origin) {
 
 function extractCookies(response) {
   const cookies = {};
-  const headers = typeof response.headers.getSetCookie === 'function'
-    ? response.headers.getSetCookie()
-    : (response.headers.getAll ? response.headers.getAll('set-cookie') : []);
-  for (const sc of headers) {
-    const nv = sc.split(';')[0];
-    const eq = nv.indexOf('=');
-    if (eq > 0) cookies[nv.substring(0, eq).trim()] = nv.substring(eq + 1).trim();
-  }
+
+  // Method 1: getSetCookie() — modern standard, returns array
+  try {
+    if (typeof response.headers.getSetCookie === 'function') {
+      const arr = response.headers.getSetCookie();
+      for (const sc of arr) {
+        const nv = sc.split(';')[0];
+        const eq = nv.indexOf('=');
+        if (eq > 0) cookies[nv.substring(0, eq).trim()] = nv.substring(eq + 1).trim();
+      }
+      if (Object.keys(cookies).length > 0) return cookies;
+    }
+  } catch {}
+
+  // Method 2: getAll() — non-standard, some runtimes support it
+  try {
+    if (typeof response.headers.getAll === 'function') {
+      const arr = response.headers.getAll('set-cookie');
+      for (const sc of arr) {
+        const nv = sc.split(';')[0];
+        const eq = nv.indexOf('=');
+        if (eq > 0) cookies[nv.substring(0, eq).trim()] = nv.substring(eq + 1).trim();
+      }
+      if (Object.keys(cookies).length > 0) return cookies;
+    }
+  } catch {}
+
+  // Method 3: get('set-cookie') — returns comma-joined string
+  // Split on ", " followed by a token that looks like a cookie name (alpha=)
+  try {
+    const raw = response.headers.get('set-cookie');
+    if (raw) {
+      const parts = raw.split(/,\s*(?=[A-Za-z_][A-Za-z0-9_]*=)/);
+      for (const part of parts) {
+        const nv = part.split(';')[0];
+        const eq = nv.indexOf('=');
+        if (eq > 0) cookies[nv.substring(0, eq).trim()] = nv.substring(eq + 1).trim();
+      }
+    }
+  } catch {}
+
   return cookies;
 }
 
@@ -45,15 +79,76 @@ function stripHtml(obj) {
   return obj;
 }
 
-async function fetchJson(url, headers) {
-  const r = await fetch(url, { headers });
+function commonHeaders() {
+  return {
+    'User-Agent': UA,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9,da;q=0.8',
+    'Referer': `${DELTAPLAN_BASE}/`,
+  };
+}
+
+async function fetchJson(url, extraHeaders) {
+  const r = await fetch(url, { headers: { ...commonHeaders(), ...extraHeaders } });
   const cookies = extractCookies(r);
   const text = await r.text();
   try {
     return { json: JSON.parse(text), cookies };
   } catch {
-    throw new Error(`Non-JSON response from ${url.split('?')[0]}: ${text.substring(0, 150)}`);
+    throw new Error(`Non-JSON from ${url.split('?')[0]} (HTTP ${r.status}): ${text.substring(0, 150)}`);
   }
+}
+
+async function doLogin(username, password) {
+  // POST login
+  const loginResp = await fetch(`${API_URL}/login`, {
+    method: 'POST',
+    headers: {
+      ...commonHeaders(),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+    redirect: 'manual',
+  });
+
+  const cookies = extractCookies(loginResp);
+  const loc = loginResp.headers.get('location') || '';
+  const status = loginResp.status;
+
+  // Debug info to include in errors
+  const debugInfo = {
+    loginStatus: status,
+    location: loc,
+    cookieCount: Object.keys(cookies).length,
+    cookieNames: Object.keys(cookies),
+    hasGetSetCookie: typeof loginResp.headers.getSetCookie === 'function',
+    responseType: loginResp.type,
+  };
+
+  if (loc.includes('err=')) {
+    throw new Error(`Login failed — invalid credentials (loc: ${loc})`);
+  }
+
+  if (Object.keys(cookies).length === 0) {
+    // No cookies extracted — try following redirect to see if we get cookies there
+    const followResp = await fetch(`${API_URL}/login`, {
+      method: 'POST',
+      headers: {
+        ...commonHeaders(),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+      // default redirect: 'follow'
+    });
+    const followCookies = extractCookies(followResp);
+    if (Object.keys(followCookies).length > 0) {
+      Object.assign(cookies, followCookies);
+    } else {
+      throw new Error(`Login succeeded (HTTP ${status}) but no cookies extracted. Debug: ${JSON.stringify(debugInfo)}`);
+    }
+  }
+
+  return cookies;
 }
 
 export default {
@@ -67,8 +162,47 @@ export default {
     const url = new URL(request.url);
 
     // Health check
-    if (url.pathname === '/' || url.pathname === '/health') {
+    if ((url.pathname === '/' || url.pathname === '/health') && request.method === 'GET') {
       return jsonResp({ status: 'ok', message: 'Deltaplan proxy worker is running' }, 200, origin);
+    }
+
+    // Debug endpoint — helps diagnose login/cookie issues
+    if (url.pathname === '/debug' && request.method === 'POST') {
+      try {
+        const { username, password } = await request.json();
+        const loginResp = await fetch(`${API_URL}/login`, {
+          method: 'POST',
+          headers: {
+            ...commonHeaders(),
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+          redirect: 'manual',
+        });
+
+        const allHeaders = {};
+        loginResp.headers.forEach((v, k) => {
+          allHeaders[k] = allHeaders[k] ? allHeaders[k] + ' | ' + v : v;
+        });
+
+        let setCookieArray = [];
+        try { setCookieArray = loginResp.headers.getSetCookie(); } catch (e) { setCookieArray = [`error: ${e.message}`]; }
+
+        const cookies = extractCookies(loginResp);
+
+        return jsonResp({
+          loginStatus: loginResp.status,
+          responseType: loginResp.type,
+          location: loginResp.headers.get('location'),
+          allHeaders,
+          getSetCookieResult: setCookieArray,
+          setCookieRaw: loginResp.headers.get('set-cookie')?.substring(0, 500),
+          extractedCookies: Object.keys(cookies),
+          extractedCookieCount: Object.keys(cookies).length,
+        }, 200, origin);
+      } catch (e) {
+        return jsonResp({ error: e.message }, 500, origin);
+      }
     }
 
     if (url.pathname !== '/schedule' || request.method !== 'POST') {
@@ -81,29 +215,12 @@ export default {
         return jsonResp({ error: 'Missing required fields' }, 400, origin);
       }
 
-      let cookies = {};
-
       // 1. Login
-      const loginResp = await fetch(`${API_URL}/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Referer': `${DELTAPLAN_BASE}/`,
-        },
-        body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
-        redirect: 'manual',
-      });
-      Object.assign(cookies, extractCookies(loginResp));
-
-      const loc = loginResp.headers.get('location') || '';
-      if (loc.includes('err=')) {
-        return jsonResp({ error: 'Login failed — invalid credentials' }, 401, origin);
-      }
+      let cookies = await doLogin(username, password);
 
       // 2. Get user info
       const userResult = await fetchJson(`${API_URL}/login`, {
         Cookie: cookieStr(cookies),
-        'Referer': `${DELTAPLAN_BASE}/`,
       });
       Object.assign(cookies, userResult.cookies);
       const userData = userResult.json;
